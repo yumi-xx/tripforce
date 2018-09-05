@@ -308,12 +308,13 @@ float trip_rate_condense(const unsigned rate, char *prefix)
 
 /* TRIPCODE ROUTINES */
 
-static const unsigned char PASSWORD_LENGTH = 8;
+static const unsigned char PASSWORD_MIN_LENGTH = 8;
+static const unsigned char PASSWORD_MAX_LENGTH = 12;
 static const unsigned char SALT_LENGTH = 4;
 static const unsigned char DES_FCRYPT_LENGTH = 14;
 static const unsigned char TRIPCODE_LENGTH = 10;
 
-void generate_password(char *password, unsigned *seed)
+void generate_password(char *password, unsigned *seed, unsigned char length)
 {
 	/* Shift-JIS is a legacy 2-byte encoding, and many *chans tend to strip or
 	   convert the more exotic characters to UTF-8, leading to unpredictable tripcodes */
@@ -324,11 +325,11 @@ void generate_password(char *password, unsigned *seed)
 	/* '#' triggers secure tripcodes on 4chan.org */
 	/* '~' and '\' don't have 1-byte Shift-JIS equivalents */
 	unsigned char i;
-	for (i = 0; i < PASSWORD_LENGTH; i++)
+	for (i = 0; i < length; i++)
 	{
 		password[i] = lookup[qrand_r(seed) % TABLE_SIZE];
 	}
-	password[PASSWORD_LENGTH] = '\0'; /* null terminate */
+	password[length] = '\0'; /* null terminate */
 }
 
 
@@ -427,7 +428,7 @@ void determine_match(pmode_t mode, char *query, char *trip, char *password, omp_
 		float avg_float = trip_rate_condense(avg_rate, &prefix);
 
 		omp_set_lock(io_lock);
-		fprintf(stdout, "TRIP: '!%s' -> PASS: '%.8s' ", trip, password);
+		fprintf(stdout, "TRIP: '!%s' -> PASS: '%s' ", trip, password);
 		if (prefix)
 			fprintf(stdout, "@ %.2f %cTrip/s\n", avg_float, prefix);
 		else
@@ -467,14 +468,18 @@ int main(int argc, char **argv)
 #endif
 	{
 		const unsigned THREAD_ID = omp_get_thread_num();
+		unsigned char length = PASSWORD_MIN_LENGTH;
+		unsigned int pass = 0;
 		while (1)
 		{
-			/* Intel Core2 Duo P8600 @ 2.401GHz w/ 2 threads
-			   CASE_SENSITIVE: 353.1 kTrips/s
-			   CASE_AGNOSTIC:  347.3 kTrips/s */
-			char password[PASSWORD_LENGTH + 1];
+			if (pass > (length - PASSWORD_MIN_LENGTH) * 92) {
+				pass = 0;
+				if (++length > PASSWORD_MAX_LENGTH)
+					length = PASSWORD_MIN_LENGTH;
+			}
+			char password[length + 1];
 			char salt[SALT_LENGTH + 1];
-			generate_password(password, &qrand_seeds[THREAD_ID]);
+			generate_password(password, &qrand_seeds[THREAD_ID], length);
 			generate_salt(password, salt);
 			strip_outliers(salt);
 			replace_punctuation(salt);
@@ -483,6 +488,7 @@ int main(int argc, char **argv)
 			truncate_tripcode(trip);
 			determine_match(mode, argv[mode], trip, password, &io_lock);
 			trip_frequency(COUNT_ONLY);
+			pass++;
 		}
 	}
 	omp_destroy_lock(&io_lock);
