@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <limits.h>
 #include <time.h>
 #include <openssl/des.h> /* Requires OpenSSL via libssl or libcrypto */
@@ -94,8 +95,9 @@ const struct _global GLOBAL = {
 enum _program_mode {
 	HELP_MSG = -1,
 	NO_QUERY_MODE = 0, /* no search function */
-	CASE_SENSITIVE = 1, /* argv[1] */
-	CASE_AGNOSTIC = 2 /* argv[2] */
+	CASE_SENSITIVE = 1,
+	CASE_AGNOSTIC = 2,
+	CASE_LEET = 3
 };
 typedef enum _program_mode pmode_t;
 
@@ -156,6 +158,7 @@ void cli_help_msg(void)
 	fprintf(stdout, "help:\n");
 	fprintf(stdout, "\t(None)\t No query. Program will print random tripcodes to stdout.\n");
 	fprintf(stdout, "\t-i\t Case agnostic search.\n");
+	fprintf(stdout, "\t-l\t L33T M0D3.\n");
 	fprintf(stdout, "\t-h\t Display this help screen.\n");
 	fprintf(stdout, "note:\n");
 	unsigned i;
@@ -409,11 +412,48 @@ char *strcasestr(const char *haystack, const char *needle)
 	}
 	return NULL;
 }
+/* Transforms c using dicta into dictb */
+char crossdicts(char *dicta, char *dictb, char c) {
+	char i;
+	for (i = 0; dicta[i] && dictb[i]; i++)
+		if (dicta[i] == c) return dictb[i];
+		if (dictb[i] == c) return dicta[i];
+	return c;
+}
+
+char *leetcmp(const char *haystack, const char *needle)
+{
+	unsigned i, j;
+	char *reg = "eoE0iIlLaaBSs\0";
+	char *leet = "303011114@855\0";
+
+	char firstneedle = needle[0];
+	char firstneedlecross = crossdicts(reg, leet, firstneedle);
+
+	for (j = 0; haystack[j]; j++) {
+	if (haystack[j] == firstneedle
+	|| haystack[j] == firstneedlecross) {
+		for (i = 1; haystack[i+j] && needle[i]; i++) {
+			if (haystack[i+j] == needle[i]
+			|| haystack[i+j] == crossdicts(reg, leet, needle[i]))
+				continue;
+			break;
+		}
+		/* Full needle matched in haystack */
+		if (!needle[i]) return (char *) haystack + j;
+		/* End of haystack reached before full needle was found */
+		if (!haystack[i+j]) return NULL;
+		/* Needle only matched half-way */
+		continue;
+	} }
+	return NULL; /* Nothing matched */
+}
 
 void determine_match(pmode_t mode, char *query, char *trip, char *password, omp_lock_t *io_lock)
 {
 	switch (mode)
 	{
+		case CASE_LEET: if (leetcmp(trip, query)) goto print; break;
 		case CASE_AGNOSTIC: if (strcasestr(trip, query)) goto print; break;
 		case CASE_SENSITIVE: if (strstr(trip, query)) goto print; break;
 		case NO_QUERY_MODE: goto print; break; /* VERY SLOW */
@@ -448,20 +488,28 @@ int main(int argc, char **argv)
 	unsigned qrand_seeds[NUM_CORES];
 	seed_qrand_r(qrand_seeds, NUM_CORES);
 
-	pmode_t mode;
-	if (argc == 1)
-		mode = NO_QUERY_MODE;
-	else if (!strcmp(argv[1], "-h")) /* help screen */
+	pmode_t mode = CASE_SENSITIVE;
+	int c; char *query;
+	while ((c = getopt(argc, argv, "hli")) != -1)
 	{
-		cli_help_msg();
-		return 1;
-	}
-	else /* determine query mode */
-	{
-		mode = (!strcmp(argv[1], "-i")) ? CASE_AGNOSTIC : CASE_SENSITIVE;
-		if (!validate_query(argv[mode]))
+		switch(c)
+		{
+		case 'h':
+			cli_help_msg();
 			return 1;
+		case 'l':
+			mode = CASE_LEET;
+			break;
+		case 'i':
+			mode = CASE_AGNOSTIC;
+			break;
+		}
 	}
+	query = argv[optind];
+	if (optind == argc)
+		mode = NO_QUERY_MODE;
+	else if (!validate_query(query))
+		return 1;
 
 #ifdef _OPENMP
 	#pragma omp parallel num_threads(NUM_CORES)
@@ -486,7 +534,7 @@ int main(int argc, char **argv)
 			char trip[DES_FCRYPT_LENGTH]; /* DES_fcrypt() asks for 14 bytes */
 			DES_fcrypt(password, salt, trip);
 			truncate_tripcode(trip);
-			determine_match(mode, argv[mode], trip, password, &io_lock);
+			determine_match(mode, query, trip, password, &io_lock);
 			trip_frequency(COUNT_ONLY);
 			pass++;
 		}
